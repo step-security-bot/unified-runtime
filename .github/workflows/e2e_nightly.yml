@@ -1,9 +1,10 @@
 name: E2E Nightly
 
-on:
-  schedule:
-    # Run every day at 23:00 UTC
-    - cron: '0 23 * * *'
+on: [push, pull_request]
+#on:
+#  schedule:
+#    # Run every day at 23:00 UTC
+#    - cron: '0 23 * * *'
 
 jobs:
   e2e-build-hw:
@@ -11,7 +12,8 @@ jobs:
     strategy:
       matrix:
         adapter: [
-          {name: CUDA}
+          {name: CUDA, str_name: cuda, config: "--cuda --hip"},
+          {name: L0, str_name: level_zero, config: ""}
         ]
         build_type: [Release]
         compiler: [{c: clang, cxx: clang++}]
@@ -60,11 +62,17 @@ jobs:
       run: LD_LIBRARY_PATH=${{github.workspace}}/dpcpp_compiler/lib
         cmake --build ${{github.workspace}}/ur-repo/build -j $(nproc)
 
-    - name: Set env vars & pre setup
+    - name: Set prefer UR
+      run: echo "SYCL_PREFER_UR=1" >> $GITHUB_ENV
+
+    - name: Set CUDA env vars
+      if: matrix.adapter.name == 'CUDA'
       run: |
-        echo "SYCL_PREFER_UR=1" >> $GITHUB_ENV
         echo "CUDA_LIB_PATH=/usr/local/cuda/lib64/stubs" >> $GITHUB_ENV
         echo "LD_LIBRARY_PATH=/usr/local/cuda/compat/:/usr/local/cuda/lib64:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+
+    - name: Run pre setup
+      run: |
         source /opt/intel/oneapi/setvars.sh
         sycl-ls
 
@@ -74,7 +82,7 @@ jobs:
         -t ${{matrix.build_type}}
         -o ${{github.workspace}}/sycl_build
         --cmake-gen "Unix Makefiles"
-        --ci-defaults --cuda --hip
+        --ci-defaults ${{matrix.adapter.config}}
         --cmake-opt="-DLLVM_INSTALL_UTILS=ON"
         --cmake-opt="-DSYCL_PI_TESTS=OFF"
         --cmake-opt=-DCMAKE_C_COMPILER_LAUNCHER=ccache
@@ -92,7 +100,7 @@ jobs:
     - name: Swap UR loader and adapters
       run: |
         cp ${{github.workspace}}/ur-repo/build/lib/libur_loader.so* ${{github.workspace}}/sycl_build/lib/
-        cp ${{github.workspace}}/ur-repo/build/lib/libur_adapter_cuda.so* ${{github.workspace}}/sycl_build/lib/
+        cp ${{github.workspace}}/ur-repo/build/lib/libur_adapter_${{matrix.adapter.str_name}}.so* ${{github.workspace}}/sycl_build/lib/
 
     - name: Set additional env. vars
       run: |
@@ -111,9 +119,14 @@ jobs:
         -GNinja
         -B ${{github.workspace}}/build-e2e/
         -S ${{github.workspace}}/sycl-repo/sycl/test-e2e/
-        -DSYCL_TEST_E2E_TARGETS="ext_oneapi_cuda:gpu"
+        -DSYCL_TEST_E2E_TARGETS="ext_oneapi_${{matrix.adapter.str_name}}:gpu"
         -DCMAKE_CXX_COMPILER="$(which clang++)"
         -DLLVM_LIT="${{github.workspace}}/sycl-repo/llvm/utils/lit/lit.py"
+
+    - name: Set extra lit options
+      if: matrix.adapter.name == 'L0'
+      run: |
+        echo "LIT_OPTS=--param gpu-intel-dg2=True" >> $GITHUB_ENV
 
     - name: Run e2e tests
       run: ninja -C build-e2e check-sycl-e2e
