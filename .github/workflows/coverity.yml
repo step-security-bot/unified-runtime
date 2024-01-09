@@ -24,6 +24,9 @@ env:
   TRAVIS_BRANCH:                     ${{ github.ref_name }}
 
 
+permissions:
+  contents: read
+
 jobs:
   linux:
     name: Coverity
